@@ -835,10 +835,20 @@ void SessionState::get_session_info(SessionState::SessionInfo& info) {
   dynamic_rules_.get_rules(info.gx_rules.rules);
   gy_dynamic_rules_.get_rules(info.gy_dynamic_rules.rules);
 
+  // Set versions
+  for (const PolicyRule rule : info.gx_rules.rules) {
+    info.gx_rules.versions.push_back(get_current_rule_version(rule.id()));
+  }
+  for (const PolicyRule rule : info.gy_dynamic_rules.rules) {
+    info.gy_dynamic_rules.versions.push_back(
+        get_current_rule_version(rule.id()));
+  }
+
   for (const std::string& rule_id : active_static_rules_) {
     PolicyRule rule;
     if (static_rules_.get_rule(rule_id, &rule)) {
-      info.gx_rules.rules.push_back(rule);
+      info.gx_rules.append_versioned_policy(
+          rule, get_current_rule_version(rule_id));
     }
   }
 }
@@ -946,41 +956,39 @@ bool SessionState::is_static_rule_installed(const std::string& rule_id) {
              rule_id) != active_static_rules_.end();
 }
 
-void SessionState::insert_dynamic_rule(
+uint32_t SessionState::insert_dynamic_rule(
     const PolicyRule& rule, RuleLifetime& lifetime,
-    SessionStateUpdateCriteria& update_criteria) {
-  if (is_dynamic_rule_installed(rule.id())) {
-    return;
-  }
+    SessionStateUpdateCriteria& session_uc) {
   rule_lifetimes_[rule.id()] = lifetime;
   dynamic_rules_.insert_rule(rule);
-  update_criteria.dynamic_rules_to_install.push_back(rule);
-  update_criteria.new_rule_lifetimes[rule.id()] = lifetime;
+  session_uc.dynamic_rules_to_install.push_back(rule);
+  session_uc.new_rule_lifetimes[rule.id()] = lifetime;
+
+  increment_rule_stats(rule.id(), session_uc);
+  return policy_version_and_stats_[rule.id()].current_version;
 }
 
-void SessionState::insert_gy_dynamic_rule(
+uint32_t SessionState::insert_gy_dynamic_rule(
     const PolicyRule& rule, RuleLifetime& lifetime,
-    SessionStateUpdateCriteria& update_criteria) {
-  if (is_gy_dynamic_rule_installed(rule.id())) {
-    MLOG(MDEBUG) << "Tried to insert " << rule.id()
-                 << " (gy dynamic rule), but it already existed";
-    return;
-  }
+    SessionStateUpdateCriteria& session_uc) {
   rule_lifetimes_[rule.id()] = lifetime;
   gy_dynamic_rules_.insert_rule(rule);
-  update_criteria.gy_dynamic_rules_to_install.push_back(rule);
-  update_criteria.new_rule_lifetimes[rule.id()] = lifetime;
+  session_uc.gy_dynamic_rules_to_install.push_back(rule);
+  session_uc.new_rule_lifetimes[rule.id()] = lifetime;
+
+  increment_rule_stats(rule.id(), session_uc);
+  return policy_version_and_stats_[rule.id()].current_version;
 }
 
 uint32_t SessionState::activate_static_rule(
     const std::string& rule_id, RuleLifetime& lifetime,
-    SessionStateUpdateCriteria& update_criteria) {
+    SessionStateUpdateCriteria& session_uc) {
   rule_lifetimes_[rule_id] = lifetime;
   active_static_rules_.push_back(rule_id);
-  update_criteria.static_rules_to_install.insert(rule_id);
-  update_criteria.new_rule_lifetimes[rule_id] = lifetime;
+  session_uc.static_rules_to_install.insert(rule_id);
+  session_uc.new_rule_lifetimes[rule_id] = lifetime;
 
-  increment_rule_stats(rule_id, update_criteria);
+  increment_rule_stats(rule_id, session_uc);
   return policy_version_and_stats_[rule_id].current_version;
 }
 
@@ -2215,6 +2223,23 @@ void SessionState::clear_create_session_response() {
 
 bool RulesToProcess::empty() const {
   return rules.empty();
+}
+
+void RulesToProcess::append_versioned_policy(
+    PolicyRule rule, uint32_t version) {
+  rules.push_back(rule);
+  versions.push_back(version);
+}
+
+uint32_t SessionState::get_current_rule_version(const std::string& rule_id) {
+  if (policy_version_and_stats_.find(rule_id) ==
+      policy_version_and_stats_.end()) {
+    MLOG(MWARNING) << "RuleID " << rule_id
+                   << " doesn't have a version registered for " << session_id_
+                   << ", this is unexpected";
+    return 0;
+  }
+  return policy_version_and_stats_[rule_id].current_version;
 }
 
 void SessionState::increment_rule_stats(

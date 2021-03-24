@@ -154,8 +154,7 @@ void LocalEnforcer::sync_sessions_on_restart(std::time_t current_time) {
     const auto& imsi = it.first;
     for (auto& session : it.second) {
       const std::string session_id = session->get_session_id();
-      MLOG(MINFO) << "Synching " << imsi << " sid = " << session_id;
-      auto& uc = session_update[imsi][session_id];
+      auto& uc                     = session_update[imsi][session_id];
       // Reschedule Revalidation Timer if it was pending before
       auto triggers   = session->get_event_triggers();
       auto trigger_it = triggers.find(REVALIDATION_TIMEOUT);
@@ -544,10 +543,12 @@ void LocalEnforcer::install_final_unit_action_flows(
       // check if the rule has been installed already.
       if (!session->is_gy_dynamic_rule_installed(rule.id())) {
         RulesToProcess to_process;
-        to_process.rules = std::vector<PolicyRule>{rule};
+
+        uint32_t version =
+            session->insert_gy_dynamic_rule(rule, lifetime, session_uc);
+        to_process.append_versioned_policy(rule, version);
         pipelined_client_->add_gy_final_action_flow(
             imsi, ip_addr, ipv6_addr, teids, msisdn, to_process);
-        session->insert_gy_dynamic_rule(rule, lifetime, session_uc);
       }
       return;
     }
@@ -662,12 +663,19 @@ void LocalEnforcer::schedule_static_rule_activation(
                          << "during installation of static rule " << rule_id;
           return;
         }
+        PolicyRule rule;
+        if (!rule_store_->get_rule(rule_id, &rule)) {
+          MLOG(MWARNING) << "Could not find static rules definition for "
+                         << rule_id;
+          return;
+        }
+
         auto& session = **session_it;
         auto& uc      = session_update[imsi][session_id];
 
         std::time_t current_time = time(nullptr);
         // don't install the rule if the current time is out of lifetime
-        if (session->should_rule_be_active(rule_id, current_time)) {
+        if (!session->should_rule_be_active(rule_id, current_time)) {
           session->deactivate_scheduled_static_rule(rule_id, uc);
           session_store_.update_sessions(session_update);
           return;
@@ -680,15 +688,10 @@ void LocalEnforcer::schedule_static_rule_activation(
         const auto ambr           = config.get_apn_ambr();
         const std::string msisdn  = config.common_context.msisdn();
 
-        if (session->is_static_rule_scheduled(rule_id)) {
-          // scheduled_static_rules_.erase(rule_id);
-        }
         uint32_t version = session->activate_static_rule(
             rule_id, session->get_rule_lifetime(rule_id), uc);
-        PolicyRule rule;
-        rule_store_->get_rule(rule_id, &rule);
         RulesToProcess to_process;
-        to_process.rules = std::vector<PolicyRule>{rule};
+        to_process.append_versioned_policy(rule, version);
 
         pipelined_client_->activate_flows_for_rules(
             imsi, ip_addr, ipv6_addr, teids, msisdn, ambr, to_process,
@@ -726,7 +729,7 @@ void LocalEnforcer::schedule_dynamic_rule_activation(
         }
         // don't install the rule if the current time is out of lifetime
         std::time_t current_time = time(nullptr);
-        if (session->should_rule_be_active(rule_id, current_time)) {
+        if (!session->should_rule_be_active(rule_id, current_time)) {
           session->remove_scheduled_dynamic_rule(rule_id, nullptr, session_uc);
           session_store_.update_sessions(session_update);
           return;
@@ -1780,6 +1783,7 @@ void LocalEnforcer::process_rules_to_install(
     if (!rule_store_->get_rule(id, &static_rule)) {
       MLOG(MERROR) << "static rule " << id
                    << " is not found, skipping install...";
+      continue;
     }
 
     RuleLifetime lifetime(rule_install);
@@ -1790,8 +1794,7 @@ void LocalEnforcer::process_rules_to_install(
     } else {
       uint32_t version = session.activate_static_rule(id, lifetime, uc);
       // Set up rules_to_activate
-      rules_to_activate.rules.push_back(static_rule);
-      rules_to_activate.versions.push_back(version);
+      rules_to_activate.append_versioned_policy(static_rule, version);
     }
 
     if (lifetime.deactivation_time > current_time) {
@@ -1817,8 +1820,9 @@ void LocalEnforcer::process_rules_to_install(
       schedule_dynamic_rule_activation(
           imsi, session_id, rule_id, lifetime.activation_time);
     } else {
-      session.insert_dynamic_rule(dynamic_rule, lifetime, uc);
-      rules_to_activate.rules.push_back(dynamic_rule);
+      uint32_t version =
+          session.insert_dynamic_rule(dynamic_rule, lifetime, uc);
+      rules_to_activate.append_versioned_policy(dynamic_rule, version);
     }
     if (lifetime.deactivation_time > current_time) {
       schedule_dynamic_rule_deactivation(

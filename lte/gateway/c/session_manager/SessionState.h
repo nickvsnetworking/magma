@@ -46,6 +46,7 @@ struct RulesToProcess {
   // Vector of rule versions. versions[i] contains the version for rules[i]
   std::vector<uint32_t> versions;
   bool empty() const;
+  void append_versioned_policy(PolicyRule rule, uint32_t version);
 };
 
 // Used to transform the proto message RuleSet into a more useful structure
@@ -317,20 +318,27 @@ class SessionState {
   /**
    * Add a dynamic rule to the session which is currently active.
    */
-  void insert_dynamic_rule(
+  uint32_t insert_dynamic_rule(
       const PolicyRule& rule, RuleLifetime& lifetime,
-      SessionStateUpdateCriteria& update_criteria);
+      SessionStateUpdateCriteria& session_uc);
 
   /**
    * Add a static rule to the session which is currently active.
    */
   uint32_t activate_static_rule(
       const std::string& rule_id, RuleLifetime& lifetime,
-      SessionStateUpdateCriteria& update_criteria);
-
-  void insert_gy_dynamic_rule(
+      SessionStateUpdateCriteria& session_uc);
+  /**
+   * @brief Insert a PolicyRule into gy_dynamic_rules_
+   *
+   * @param rule
+   * @param lifetime
+   * @param update_criteria
+   * @return uint32_t
+   */
+  uint32_t insert_gy_dynamic_rule(
       const PolicyRule& rule, RuleLifetime& lifetime,
-      SessionStateUpdateCriteria& update_criteria);
+      SessionStateUpdateCriteria& session_uc);
 
   /**
    * Remove a currently active dynamic rule to mark it as deactivated.
@@ -778,6 +786,14 @@ class SessionState {
    */
   void increment_rule_stats(
       const std::string& rule_id, SessionStateUpdateCriteria& session_uc);
+
+  /**
+   * @brief Get the current rule version object
+   *
+   * @param rule_id
+   * @return uint32_t
+   */
+  uint32_t get_current_rule_version(const std::string& rule_id);
 };
 
 }  // namespace magma

@@ -87,9 +87,16 @@ magma::ActivateFlowsRequest create_activate_req(
   if (ambr) {
     req.mutable_apn_ambr()->CopyFrom(*ambr);
   }
+  // TODO depracate dynamic rules fields
   auto mut_dyn_rules = req.mutable_dynamic_rules();
   for (const auto& dyn_rule : to_process.rules) {
     mut_dyn_rules->Add()->CopyFrom(dyn_rule);
+  }
+  auto mut_versioned_rules = req.mutable_policies();
+  for (int index = 0; index < to_process.rules.size(); ++index) {
+    mut_versioned_rules->Add()->set_version(to_process.versions[index]);
+    mut_versioned_rules->Add()->mutable_rule()->CopyFrom(
+        to_process.rules[index]);
   }
   return req;
 }
